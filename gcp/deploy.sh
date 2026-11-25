@@ -14,14 +14,23 @@ API_DIR="$(cd "${API_DIR:-$INFRA/../solutions-praia-api}" 2>/dev/null && pwd)" |
 [[ -f "$API_DIR/Dockerfile" ]] || { echo "Sem Dockerfile em $API_DIR (é a pasta do solutions-praia-api?)" >&2; exit 1; }
 echo "Ambiente: $AMBIENTE (projeto $PROJETO) | API: $API_DIR"
 
-# imagem com o commit (homologação) ou a versão (produção, TAG=v1.2.3) da API
-TAG="${TAG:-$(git -C "$API_DIR" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
+# Nome (tag) de cada imagem = versão do código de onde ela sai, para um deploy repetido reaproveitar só o que não mudou:
+#   - API: commit (homologação) ou versão (produção, TAG=v1.2.3) do solutions-praia-api;
+#   - Keycloak e despertador: saem DESTE repositório, então levam também o commit do solutions-infra.
+# Pasta com alterações ainda sem commit ganha um carimbo de hora (nunca reaproveita uma imagem antiga por engano).
+versao() {   # pasta
+  local v; v="$(git -C "$1" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
+  [[ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]] && v="$v-mod$(date +%Y%m%d%H%M%S)"
+  echo "$v"
+}
+TAG="${TAG:-$(versao "$API_DIR")}"
+TAG_INFRA="$(versao "$INFRA")"
 REGISTRO="$REGIAO-docker.pkg.dev/$PROJETO/praia"
 NUMERO=$(gcloud projects describe "$PROJETO" --format='value(projectNumber)')
 export PROJETO REGIAO REDE SUBREDE ADMIN_EMAIL AMBIENTE MAX_API DADOS_EXEMPLO
 export IMAGEM_API="$REGISTRO/praia-api:$TAG"
-export IMAGEM_KEYCLOAK="$REGISTRO/praia-keycloak:$TAG"
-IMAGEM_DESPERTADOR="$REGISTRO/praia-despertador:$TAG"
+export IMAGEM_KEYCLOAK="$REGISTRO/praia-keycloak:$TAG-$TAG_INFRA"
+IMAGEM_DESPERTADOR="$REGISTRO/praia-despertador:$TAG-$TAG_INFRA"
 export URL_PUBLICA="${DOMINIO:+https://$DOMINIO}"; URL_PUBLICA="${URL_PUBLICA:-https://$PROJETO.web.app}"
 # URL determinística do Cloud Run: https://<serviço>-<número do projeto>.<região>.run.app
 export URL_KEYCLOAK="https://praia-keycloak-$NUMERO.$REGIAO.run.app"

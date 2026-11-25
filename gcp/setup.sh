@@ -141,6 +141,10 @@ done
 passo "Artifact Registry (imagens)"
 existe gcloud artifacts repositories describe praia --location "$REGIAO" || \
   gcloud artifacts repositories create praia --repository-format=docker --location "$REGIAO"
+# Despertador: mudar a instância mínima cria uma revisão nova do serviço, e o Cloud Run exige que quem faz a mudança
+# consiga ler a imagem. Só leitura, e só neste repositório de imagens.
+tentar gcloud artifacts repositories add-iam-policy-binding praia --location "$REGIAO" \
+  --member="serviceAccount:$(SA praia-despertador)" --role=roles/artifactregistry.reader
 
 # Cloud Build (deploy pelo Cloud Shell monta as imagens dentro do Google): em projetos novos ele roda com a conta
 # padrão do Compute, que precisa ler o código enviado, gravar a imagem no registro e escrever o log do build.

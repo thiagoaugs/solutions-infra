@@ -1,0 +1,6 @@
+# Scripts e arquivos que rodam em Linux (Cloud Shell, containers, GitHub Actions) sempre com fim de linha LF,
+# mesmo editados no Windows: um .sh com CRLF quebra no Linux ("bad interpreter", "$'\r': command not found").
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary

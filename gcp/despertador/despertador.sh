@@ -38,6 +38,8 @@ em_horario() {
 }
 
 sql() { gcloud sql instances "$@" "$INSTANCIA_SQL" --project "$PROJETO" --quiet; }
+# Rótulos (labels) do Cloud SQL só existem no "gcloud beta" (o patch normal recusa --update-labels/--remove-labels).
+sql_beta() { gcloud beta sql instances "$@" "$INSTANCIA_SQL" --project "$PROJETO" --quiet; }
 
 estado_banco() { sql describe --format='value(settings.activationPolicy)'; }
 
@@ -82,7 +84,7 @@ hibernar() {
   for s in ${SERVICOS//,/ }; do ajustar_min "$s" 0; done
   if [[ "$(estado_banco)" != "NEVER" ]]; then
     log "desligando o banco..."
-    sql patch --activation-policy=NEVER --remove-labels=acordado_ate >/dev/null
+    sql_beta patch --activation-policy=NEVER --remove-labels=acordado_ate >/dev/null
   fi
   log "ambiente HIBERNADO"
 }
@@ -94,7 +96,7 @@ case "$ACAO" in
     acordar
     if ! em_horario; then
       ATE=$((AGORA + HORAS_EXTRAS * 3600))
-      sql patch --update-labels="acordado_ate=$ATE" >/dev/null
+      sql_beta patch --update-labels="acordado_ate=$ATE" >/dev/null
       log "fora do horário: fica ligado até $(data_hora "$ATE") e depois hiberna sozinho"
     fi
     ;;
