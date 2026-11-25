@@ -77,7 +77,7 @@ construir "$IMAGEM_DESPERTADOR" "$INFRA/gcp/despertador"
 passo "Despertador (Cloud Run Job) e agendamento a cada 15 min"
 gcloud run jobs deploy praia-despertador --project "$PROJETO" --region "$REGIAO" --image "$IMAGEM_DESPERTADOR" \
   --service-account "praia-despertador@$PROJETO.iam.gserviceaccount.com" \
-  --task-timeout=15m --max-retries=0 --cpu=1 --memory=512Mi \
+  --task-timeout=40m --max-retries=0 --cpu=1 --memory=512Mi \
   --set-env-vars="^@^PROJETO=$PROJETO@REGIAO=$REGIAO@INSTANCIA_SQL=$INSTANCIA_SQL@SERVICOS=$SERVICOS_SEMPRE_PRONTOS@MIN_INSTANCIAS=$MIN_INSTANCIAS@HORA_ACORDAR=$HORA_ACORDAR@HORA_HIBERNAR=$HORA_HIBERNAR@DIAS=$DIAS@FUSO=$FUSO" \
   --quiet
 URI_JOB="https://run.googleapis.com/v2/projects/$PROJETO/locations/$REGIAO/jobs/praia-despertador:run"

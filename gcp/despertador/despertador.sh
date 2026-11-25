@@ -43,6 +43,25 @@ sql_beta() { gcloud beta sql instances "$@" "$INSTANCIA_SQL" --project "$PROJETO
 
 estado_banco() { sql describe --format='value(settings.activationPolicy)'; }
 
+# Ligar/desligar o banco pode levar vários minutos, mais do que o gcloud espera por padrão ("is taking longer than
+# expected" e erro, com a operação seguindo sozinha). Por isso: espera alguma operação que já esteja em andamento
+# (ex.: o agendamento de 15 em 15 min rodando ao mesmo tempo), dispara a mudança sem bloquear e acompanha até 25 min.
+ESPERA_BANCO_S="${ESPERA_BANCO_S:-1500}"
+esperar_operacoes_do_banco() {
+  local op
+  for op in $(gcloud sql operations list --instance "$INSTANCIA_SQL" --project "$PROJETO" \
+                --filter='status!=DONE' --format='value(name)' 2>/dev/null); do
+    log "aguardando uma operação do banco que já estava em andamento..."
+    gcloud beta sql operations wait "$op" --project "$PROJETO" --timeout="$ESPERA_BANCO_S" >/dev/null
+  done
+}
+mudar_banco() {   # ALWAYS|NEVER [opções extras do patch, ex.: --remove-labels=...]
+  local politica="$1" op; shift
+  esperar_operacoes_do_banco
+  op=$(sql_beta patch --activation-policy="$politica" "$@" --async --format='value(name)')
+  gcloud beta sql operations wait "$op" --project "$PROJETO" --timeout="$ESPERA_BANCO_S" >/dev/null
+}
+
 # Prazo (epoch) até quando o ambiente fica ligado fora do horário, guardado como label do Cloud SQL
 acordado_ate() {
   local v
@@ -73,8 +92,8 @@ ajustar_min() {
 
 acordar() {
   if [[ "$(estado_banco)" != "ALWAYS" ]]; then
-    log "ligando o banco (leva de 1 a 3 minutos)..."
-    sql patch --activation-policy=ALWAYS >/dev/null
+    log "ligando o banco (pode levar alguns minutos)..."
+    mudar_banco ALWAYS
   fi
   for s in ${SERVICOS//,/ }; do ajustar_min "$s" "$MIN_INSTANCIAS"; done
   log "ambiente LIGADO"
@@ -84,7 +103,7 @@ hibernar() {
   for s in ${SERVICOS//,/ }; do ajustar_min "$s" 0; done
   if [[ "$(estado_banco)" != "NEVER" ]]; then
     log "desligando o banco..."
-    sql_beta patch --activation-policy=NEVER --remove-labels=acordado_ate >/dev/null
+    mudar_banco NEVER --remove-labels=acordado_ate
   fi
   log "ambiente HIBERNADO"
 }
