@@ -11,6 +11,7 @@ if [[ "$_AMBIENTE" != "homologacao" && "$_AMBIENTE" != "producao" ]]; then
   echo "Informe o ambiente: homologacao ou producao (ex.: bash gcp/deploy.sh homologacao)" >&2
   exit 1
 fi
+# shellcheck source=/dev/null
 source "$_PASTA_AMBIENTES/$_AMBIENTE.env"
 
 if [[ "$PROJETO" == troque-pelo-id-do-projeto* ]]; then

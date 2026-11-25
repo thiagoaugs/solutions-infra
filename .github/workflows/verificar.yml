@@ -1,0 +1,26 @@
+name: Verificar
+
+# Confere os scripts de infra SEM acessar o GCP (não publica nada): shellcheck + gcp/testes/verificar.sh
+# (sintaxe, ambientes, arquivos do Cloud Run e fluxos do despertador com gcloud simulado).
+# Rode o mesmo no seu computador: bash gcp/testes/verificar.sh
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck (erros e avisos)
+        run: shellcheck -S warning -x $(git ls-files '*.sh')
+      - name: PyYAML (para validar os arquivos do Cloud Run)
+        run: python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+      - name: Verificar scripts, ambientes e despertador
+        run: bash gcp/testes/verificar.sh

@@ -179,11 +179,14 @@ if [[ -n "$REPO_GITHUB" ]]; then
       --member="principalSet://iam.googleapis.com/projects/$NUMERO/locations/global/workloadIdentityPools/github/attribute.repository/$repo"
   done
   echo
-  echo "Nos dois repositórios do GitHub: Settings > Environments > New environment \"$AMBIENTE\""
-  echo "e, dentro dele, as variáveis (Environment variables):"
-  echo "  GCP_PROJETO      = $PROJETO"
-  echo "  GCP_WIF_PROVIDER = projects/$NUMERO/locations/global/workloadIdentityPools/github/providers/github"
-  echo "  GCP_DEPLOYER_SA  = $(SA praia-deployer)"
+  SUFIXO="$(echo "$AMBIENTE" | tr '[:lower:]' '[:upper:]')"
+  echo "Nos dois repositórios do GitHub (API e frontend):"
+  echo "  Settings > Secrets and variables > Actions > Variables > New repository variable"
+  echo "  GCP_PROJETO_$SUFIXO      = $PROJETO"
+  echo "  GCP_WIF_PROVIDER_$SUFIXO = projects/$NUMERO/locations/global/workloadIdentityPools/github/providers/github"
+  echo "  GCP_DEPLOYER_SA_$SUFIXO  = $(SA praia-deployer)"
+  echo "  DEPLOY_GCP = true   (uma vez só, liga os deploys)"
+  echo "E, só no repositório da API, o segredo INFRA_REPO_TOKEN (token com leitura do solutions-infra)."
 fi
 
 passo "Pronto. Próximo passo: bash gcp/deploy.sh $AMBIENTE"

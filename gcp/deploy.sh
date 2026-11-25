@@ -34,7 +34,10 @@ IMAGEM_DESPERTADOR="$REGISTRO/praia-despertador:$TAG-$TAG_INFRA"
 export URL_PUBLICA="${DOMINIO:+https://$DOMINIO}"; URL_PUBLICA="${URL_PUBLICA:-https://$PROJETO.web.app}"
 # URL determinística do Cloud Run: https://<serviço>-<número do projeto>.<região>.run.app
 export URL_KEYCLOAK="https://praia-keycloak-$NUMERO.$REGIAO.run.app"
-export IP_SQL=$(gcloud sql instances describe "$INSTANCIA_SQL" --project "$PROJETO" --format='value(ipAddresses[0].ipAddress)')
+# declarar e atribuir separado: se o gcloud falhar, o deploy para aqui (com "export x=$(...)" o erro seria engolido)
+IP_SQL=$(gcloud sql instances describe "$INSTANCIA_SQL" --project "$PROJETO" --format='value(ipAddresses[0].ipAddress)')
+[[ -n "$IP_SQL" ]] || { echo "Não achei o IP privado do banco $INSTANCIA_SQL (rodou o gcp/setup.sh?)" >&2; exit 1; }
+export IP_SQL
 passo() { echo; echo "==> $*"; }
 
 # Como as imagens são construídas:
@@ -96,8 +99,8 @@ min_atual() {
   gcloud run services describe "$1" --project "$PROJETO" --region "$REGIAO" --format=json 2>/dev/null \
     | grep -o '"autoscaling.knative.dev/minScale": *"[0-9]*"' | grep -o '[0-9]*"$' | tr -d '"' || true
 }
-export MIN_KEYCLOAK=$(min_atual praia-keycloak); MIN_KEYCLOAK="${MIN_KEYCLOAK:-1}"
-export MIN_API=$(min_atual praia-api); MIN_API="${MIN_API:-1}"
+MIN_KEYCLOAK=$(min_atual praia-keycloak); MIN_KEYCLOAK="${MIN_KEYCLOAK:-1}"; export MIN_KEYCLOAK
+MIN_API=$(min_atual praia-api); MIN_API="${MIN_API:-1}"; export MIN_API
 VARS='${AMBIENTE} ${MAX_API} ${DADOS_EXEMPLO} ${PROJETO} ${REGIAO} ${REDE} ${SUBREDE} ${IP_SQL} ${URL_PUBLICA} ${URL_KEYCLOAK} ${ADMIN_EMAIL} ${IMAGEM_API} ${IMAGEM_KEYCLOAK} ${MIN_API} ${MIN_KEYCLOAK}'
 
 implantar() {   # serviço arquivo

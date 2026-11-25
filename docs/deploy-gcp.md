@@ -124,32 +124,42 @@ Faça **primeiro a homologação** e, quando estiver funcionando, repita para a 
 
 ### Deploy contínuo (GitHub Actions)
 
-Em **cada um dos dois repositórios**, crie dois *Environments* (*Settings → Environments → New environment*):
-`homologacao` e `producao`. Dentro de cada um, as variáveis que o `setup.sh` daquele ambiente imprime no final:
+Os repositórios são privados no plano gratuito do GitHub, onde os *Environments* não estão disponíveis. Por isso cada
+ambiente usa **variáveis do repositório com o nome do ambiente no final**. Em **cada um dos dois repositórios** (API e
+frontend): *Settings → Secrets and variables → Actions → Variables → New repository variable*. O `setup.sh` de cada
+ambiente imprime os valores no final:
 
 | Variável | O que é |
 |---|---|
-| `GCP_PROJETO` | ID do projeto GCP do ambiente |
-| `GCP_WIF_PROVIDER` | provedor do Workload Identity Federation do projeto |
-| `GCP_DEPLOYER_SA` | conta de serviço `praia-deployer` do projeto |
+| `GCP_PROJETO_HOMOLOGACAO` / `GCP_PROJETO_PRODUCAO` | ID do projeto GCP do ambiente |
+| `GCP_WIF_PROVIDER_HOMOLOGACAO` / `GCP_WIF_PROVIDER_PRODUCAO` | provedor do Workload Identity Federation do projeto |
+| `GCP_DEPLOYER_SA_HOMOLOGACAO` / `GCP_DEPLOYER_SA_PRODUCAO` | conta de serviço `praia-deployer` do projeto |
+| `DEPLOY_GCP` = `true` | liga os deploys (sem ela, os pushes rodam só os testes e os deploys aparecem como "skipped") |
 
-O workflow da **API** baixa este repositório (`solutions-infra`) para rodar o `gcp/deploy.sh`. Se ele for
-**privado**, crie no repositório da API o segredo `INFRA_REPO_TOKEN` (*Settings → Secrets and variables → Actions*)
-com um token de leitura deste repositório (GitHub → *Settings → Developer settings → Fine-grained tokens*, acesso
-só a `solutions-infra`, permissão *Contents: Read*). O frontend não precisa: ele só publica no Firebase Hosting.
+Se faltar alguma variável, o deploy para logo no primeiro passo dizendo qual é.
+
+O workflow da **API** baixa este repositório (`solutions-infra`) para rodar o `gcp/deploy.sh`. Como ele é **privado**,
+crie no repositório da API o segredo `INFRA_REPO_TOKEN` (*Settings → Secrets and variables → Actions → Secrets*) com
+um token de leitura deste repositório (GitHub → *Settings → Developer settings → Fine-grained tokens*, acesso só a
+`solutions-infra`, permissão *Contents: Read*, validade de 1 ano). O frontend não precisa: ele só publica no Firebase.
 
 Mudanças aqui (horário, tamanho do banco, limites) valem no **próximo deploy** de cada ambiente: um push na `main`
 da API (homologação) ou uma tag nova (produção). Para aplicar sem esperar, rode `bash gcp/deploy.sh <ambiente>`.
 
-Por último, **ligue os deploys**: em cada um dos dois repositórios, crie a variável do repositório `DEPLOY_GCP` = `true`
-(*Settings → Secrets and variables → Actions → Variables*, aba *Repository variables*). Sem ela, os pushes rodam só
-os testes e os jobs de deploy aparecem como "skipped": assim dá para usar o GitHub antes de o GCP existir.
+Regras dos workflows:
 
-Recomendado no environment `producao`: em *Deployment branches and tags*, permita só tags `v*`; se quiser uma
-segunda conferência, ative *Required reviewers* (alguém aprova antes de publicar).
-
-Não há chave de conta de serviço guardada no GitHub: o login usa Workload Identity Federation, e o próprio GCP só
-aceita o deploy vindo da `main` (homologação) ou de uma tag `v*` (produção), dos seus dois repositórios.
+- **Segurança:** não há chave de conta de serviço guardada no GitHub. O login usa Workload Identity Federation, e o
+  próprio GCP só aceita deploy vindo da `main` (homologação) ou de uma tag `v*` (produção), dos seus dois
+  repositórios. Só os jobs de deploy podem pedir esse login; os testes e os pull requests não.
+- **Tempo:** cada job tem limite (testes 15–20 min, deploy 45 min), para um travamento não consumir os 2.000
+  minutos/mês do plano gratuito.
+- **Ordem numa versão nova:** crie a tag primeiro na API, espere o deploy dela terminar e só então no frontend.
+- **Este repositório** (`solutions-infra`) tem o workflow *Verificar*: shellcheck e `gcp/testes/verificar.sh`
+  (sintaxe, ambientes, arquivos do Cloud Run e o despertador com um gcloud simulado), sem acessar o GCP. Rode o mesmo
+  antes do push: `bash gcp/testes/verificar.sh`.
+- **Sem proteção de branch:** no plano gratuito, em repositório privado, o GitHub não impede push na `main` com teste
+  quebrado. O deploy não roda se os testes falharem, mas o código entra na `main`. Prefira trabalhar em branch e
+  abrir pull request, olhando os testes antes do merge.
 
 ### Domínio próprio
 
