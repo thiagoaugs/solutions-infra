@@ -94,14 +94,30 @@ conta praia-keycloak "Keycloak (Cloud Run)"
 conta praia-despertador "Despertador: hiberna/acorda o ambiente"
 conta praia-deployer "Deploy pelo GitHub Actions"
 SA() { echo "$1@$PROJETO.iam.gserviceaccount.com"; }
-papel_projeto() { gcloud projects add-iam-policy-binding "$PROJETO" --member="serviceAccount:$(SA "$1")" --role="$2" --condition=None >/dev/null; }
+
+# Conta de serviço recém-criada leva alguns segundos para valer no IAM ("does not exist"), e duas mudanças de
+# permissão ao mesmo tempo no projeto podem conflitar. Nesses casos, espera e tenta de novo (até ~2 minutos).
+tentar() {
+  local i saida
+  for i in $(seq 1 12); do
+    if saida=$("$@" 2>&1); then return 0; fi
+    case "$saida" in
+      *"does not exist"*|*"concurrent"*|*"ABORTED"*|*"409"*)
+        echo "   aguardando o IAM do Google atualizar (tentativa $i de 12)..."; sleep "${ESPERA_IAM:-10}" ;;
+      *) echo "$saida" >&2; return 1 ;;
+    esac
+  done
+  echo "$saida" >&2
+  return 1
+}
+papel_projeto() { tentar gcloud projects add-iam-policy-binding "$PROJETO" --member="serviceAccount:$(SA "$1")" --role="$2" --condition=None; }
 
 # API e Keycloak: só leem os próprios segredos
 for s in db-app-password db-owner-password keycloak-api-client-secret webpush-chave-publica webpush-chave-privada; do
-  gcloud secrets add-iam-policy-binding "$s" --member="serviceAccount:$(SA praia-api)" --role=roles/secretmanager.secretAccessor >/dev/null
+  tentar gcloud secrets add-iam-policy-binding "$s" --member="serviceAccount:$(SA praia-api)" --role=roles/secretmanager.secretAccessor
 done
 for s in db-keycloak-password keycloak-bootstrap-password keycloak-api-client-secret praia-admin-senha-inicial; do
-  gcloud secrets add-iam-policy-binding "$s" --member="serviceAccount:$(SA praia-keycloak)" --role=roles/secretmanager.secretAccessor >/dev/null
+  tentar gcloud secrets add-iam-policy-binding "$s" --member="serviceAccount:$(SA praia-keycloak)" --role=roles/secretmanager.secretAccessor
 done
 # API: envia push de pedido novo para o app Android da equipe
 papel_projeto praia-api roles/firebasecloudmessaging.admin
@@ -109,8 +125,8 @@ papel_projeto praia-api roles/firebasecloudmessaging.admin
 papel_projeto praia-despertador roles/cloudsql.editor
 papel_projeto praia-despertador roles/run.developer
 for alvo in praia-api praia-keycloak; do
-  gcloud iam service-accounts add-iam-policy-binding "$(SA "$alvo")" \
-    --member="serviceAccount:$(SA praia-despertador)" --role=roles/iam.serviceAccountUser >/dev/null
+  tentar gcloud iam service-accounts add-iam-policy-binding "$(SA "$alvo")" \
+    --member="serviceAccount:$(SA praia-despertador)" --role=roles/iam.serviceAccountUser
 done
 # Deployer (CI): publica imagens, serviços, job, agendamento e Firebase Hosting
 for p in roles/run.admin roles/artifactregistry.writer roles/cloudsql.viewer roles/cloudscheduler.admin \
@@ -118,8 +134,8 @@ for p in roles/run.admin roles/artifactregistry.writer roles/cloudsql.viewer rol
   papel_projeto praia-deployer "$p"
 done
 for alvo in praia-api praia-keycloak praia-despertador; do
-  gcloud iam service-accounts add-iam-policy-binding "$(SA "$alvo")" \
-    --member="serviceAccount:$(SA praia-deployer)" --role=roles/iam.serviceAccountUser >/dev/null
+  tentar gcloud iam service-accounts add-iam-policy-binding "$(SA "$alvo")" \
+    --member="serviceAccount:$(SA praia-deployer)" --role=roles/iam.serviceAccountUser
 done
 
 passo "Artifact Registry (imagens)"
@@ -148,8 +164,8 @@ if [[ -n "$REPO_GITHUB" ]]; then
       --attribute-condition="$CONDICAO"
   fi
   for repo in "${REPOS[@]}"; do
-    gcloud iam service-accounts add-iam-policy-binding "$(SA praia-deployer)" --role=roles/iam.workloadIdentityUser \
-      --member="principalSet://iam.googleapis.com/projects/$NUMERO/locations/global/workloadIdentityPools/github/attribute.repository/$repo" >/dev/null
+    tentar gcloud iam service-accounts add-iam-policy-binding "$(SA praia-deployer)" --role=roles/iam.workloadIdentityUser \
+      --member="principalSet://iam.googleapis.com/projects/$NUMERO/locations/global/workloadIdentityPools/github/attribute.repository/$repo"
   done
   echo
   echo "Nos dois repositórios do GitHub: Settings > Environments > New environment \"$AMBIENTE\""
