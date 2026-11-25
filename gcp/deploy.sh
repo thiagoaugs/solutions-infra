@@ -33,7 +33,18 @@ gcloud auth configure-docker "$REGIAO-docker.pkg.dev" --quiet
 docker build -t "$IMAGEM_API" "$API_DIR"
 docker build -t "$IMAGEM_KEYCLOAK" "$INFRA/keycloak"
 docker build -t "$IMAGEM_DESPERTADOR" "$INFRA/gcp/despertador"
-docker push -q "$IMAGEM_API"; docker push -q "$IMAGEM_KEYCLOAK"; docker push -q "$IMAGEM_DESPERTADOR"
+# Envio com nova tentativa: falha momentânea de rede (ex.: "connection refused" no Cloud Shell) não derruba o deploy.
+# O docker retoma de onde parou; o que já subiu não é enviado de novo.
+enviar_imagem() {
+  local i
+  for i in 1 2 3 4; do
+    docker push -q "$1" && return 0
+    [[ $i -lt 4 ]] && { echo "   falha ao enviar $1 (tentativa $i de 4); tentando de novo em ${ESPERA_PUSH:-15}s..."; sleep "${ESPERA_PUSH:-15}"; }
+  done
+  echo "Não foi possível enviar $1. Teste a rede: curl -sI https://$REGIAO-docker.pkg.dev/v2/ (esperado: 401)" >&2
+  return 1
+}
+enviar_imagem "$IMAGEM_API"; enviar_imagem "$IMAGEM_KEYCLOAK"; enviar_imagem "$IMAGEM_DESPERTADOR"
 
 passo "Despertador (Cloud Run Job) e agendamento a cada 15 min"
 gcloud run jobs deploy praia-despertador --project "$PROJETO" --region "$REGIAO" --image "$IMAGEM_DESPERTADOR" \
