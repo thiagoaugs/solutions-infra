@@ -1,0 +1,120 @@
+{
+  "realm": "praia",
+  "displayName": "Swell",
+  "enabled": true,
+  "sslRequired": "external",
+  "internationalizationEnabled": true,
+  "supportedLocales": ["pt-BR"],
+  "defaultLocale": "pt-BR",
+  "loginWithEmailAllowed": true,
+  "resetPasswordAllowed": true,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 43200,
+  "ssoSessionMaxLifespan": 57600,
+  "passwordPolicy": "length(8) and notUsername",
+  "roles": {
+    "realm": [
+      { "name": "ADMIN", "description": "Administrador do sistema: cadastra barracas e acessa todas" },
+      { "name": "GERENTE", "description": "Gerente da barraca: cardápio, preços, mesas, equipe e contas" },
+      { "name": "CAIXA", "description": "Caixa: pedidos, fechamento de conta e pagamentos" },
+      { "name": "ATENDENTE", "description": "Garçom/cozinha: acompanha pedidos e marca entregas" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "praia-android",
+      "name": "App Android da equipe",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": ["br.com.solutions.praia.equipe:/oauth2redirect"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "br.com.solutions.praia.equipe:/oauth2redirect"
+      },
+      "protocolMappers": [
+        {
+          "name": "grupos (barraca)",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "praia-web",
+      "name": "Telas da barraca",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": ["${PRAIA_URL_PUBLICA}/*"],
+      "webOrigins": ["+"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "protocolMappers": [
+        {
+          "name": "grupos (barraca)",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "praia-api",
+      "name": "API (gestão de equipe)",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${PRAIA_API_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "${PRAIA_ADMIN_EMAIL}",
+      "emailVerified": true,
+      "firstName": "Administrador",
+      "lastName": "Sistema",
+      "credentials": [{ "type": "password", "value": "${PRAIA_ADMIN_SENHA_INICIAL}", "temporary": true }],
+      "requiredActions": ["UPDATE_PASSWORD"],
+      "realmRoles": ["ADMIN"]
+    },
+    {
+      "username": "service-account-praia-api",
+      "enabled": true,
+      "serviceAccountClientId": "praia-api",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users", "query-groups", "view-realm"]
+      }
+    }
+  ]
+}

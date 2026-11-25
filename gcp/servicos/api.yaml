@@ -1,0 +1,81 @@
+# Cloud Run: API. Variáveis ${...} preenchidas pelo deploy.sh (envsubst).
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: praia-api
+  labels:
+    cloud.googleapis.com/location: ${REGIAO}
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        # mínimo controlado pelo despertador (deploy.sh preserva o valor atual)
+        autoscaling.knative.dev/minScale: '${MIN_API}'
+        autoscaling.knative.dev/maxScale: '${MAX_API}'
+        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/startup-cpu-boost: 'true'
+        # banco só por IP privado (Direct VPC egress)
+        run.googleapis.com/network-interfaces: '[{"network":"${REDE}","subnetwork":"${SUBREDE}"}]'
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+    spec:
+      serviceAccountName: praia-api@${PROJETO}.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 60
+      containers:
+        - name: api
+          image: ${IMAGEM_API}
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: DB_URL
+              value: jdbc:postgresql://${IP_SQL}:5432/praia?sslmode=require
+            - name: DB_APP_USER
+              value: praia_app
+            - name: DB_OWNER_USER
+              value: praia_owner
+            - name: PRAIA_URL_PUBLICA
+              value: ${URL_PUBLICA}
+            # homologacao | producao (as telas mostram a faixa "AMBIENTE DE TESTES" fora da produção)
+            - name: PRAIA_AMBIENTE
+              value: ${AMBIENTE}
+            - name: DADOS_EXEMPLO
+              value: '${DADOS_EXEMPLO}'
+            - name: KEYCLOAK_URL
+              value: ${URL_KEYCLOAK}
+            # push de pedido novo para o app Android da equipe (Firebase Cloud Messaging)
+            - name: PUSH_HABILITADO
+              value: 'true'
+            - name: PUSH_PROJETO_FIREBASE
+              value: ${PROJETO}
+            - name: DB_APP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db-app-password, key: latest }
+            - name: DB_OWNER_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db-owner-password, key: latest }
+            - name: KEYCLOAK_ADMIN_SECRET
+              valueFrom:
+                secretKeyRef: { name: keycloak-api-client-secret, key: latest }
+            # Web Push da app web instalada pela equipe (chaves VAPID)
+            - name: WEBPUSH_CHAVE_PUBLICA
+              valueFrom:
+                secretKeyRef: { name: webpush-chave-publica, key: latest }
+            - name: WEBPUSH_CHAVE_PRIVADA
+              valueFrom:
+                secretKeyRef: { name: webpush-chave-privada, key: latest }
+          resources:
+            limits:
+              cpu: '1'
+              memory: 1Gi
+          startupProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 20
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8080 }
+            periodSeconds: 30
+            timeoutSeconds: 3

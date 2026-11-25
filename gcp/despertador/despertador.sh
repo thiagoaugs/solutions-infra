@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Despertador do ambiente: liga e desliga o que custa dinheiro parado.
+#
+# Roda como Cloud Run Job (imagem com gcloud), disparado a cada 15 min pelo Cloud Scheduler com a ação
+# "verificar", e manualmente (atalhos acordar/hibernar) quando precisar fora do horário.
+#
+#   verificar         (padrão) no horário → garante tudo ligado; fora do horário → hiberna,
+#                     a não ser que tenha sido acordado manualmente e o prazo ainda não venceu
+#   acordar [HORAS]   liga agora; se estiver fora do horário, fica ligado por HORAS (padrão 3)
+#                     e depois o próprio "verificar" hiberna de novo
+#   hibernar          desliga agora (no horário, o próximo "verificar" liga de novo; para manter
+#                     desligado o dia todo, pause o agendamento: gcloud scheduler jobs pause ...)
+#   status            mostra o estado atual
+#
+# Ligar = banco ALWAYS + serviços com instância mínima. Hibernar = serviços com mínimo 0 + banco NEVER.
+# Todas as ações são idempotentes: rodar de novo não muda nada se já estiver no estado certo.
+set -euo pipefail
+
+: "${PROJETO:?defina PROJETO}" "${REGIAO:?defina REGIAO}" "${INSTANCIA_SQL:?defina INSTANCIA_SQL}"
+SERVICOS="${SERVICOS:-praia-keycloak}"
+MIN_INSTANCIAS="${MIN_INSTANCIAS:-1}"
+HORA_ACORDAR="${HORA_ACORDAR:-7}"
+HORA_HIBERNAR="${HORA_HIBERNAR:-20}"
+DIAS="${DIAS:-1234567}"
+FUSO="${FUSO:-America/Sao_Paulo}"
+ACAO="${1:-verificar}"
+HORAS_EXTRAS="${2:-3}"
+
+log() { echo "[despertador] $*"; }
+
+# AGORA_TESTE (epoch) permite simular outro horário nos testes
+AGORA="${AGORA_TESTE:-$(date +%s)}"
+HORA=$((10#$(TZ="$FUSO" date -d "@$AGORA" +%H)))
+DIA=$(TZ="$FUSO" date -d "@$AGORA" +%u)
+
+em_horario() {
+  [[ "$DIAS" == *"$DIA"* ]] && (( HORA >= HORA_ACORDAR && HORA < HORA_HIBERNAR ))
+}
+
+sql() { gcloud sql instances "$@" "$INSTANCIA_SQL" --project "$PROJETO" --quiet; }
+
+estado_banco() { sql describe --format='value(settings.activationPolicy)'; }
+
+# Prazo (epoch) até quando o ambiente fica ligado fora do horário, guardado como label do Cloud SQL
+acordado_ate() {
+  local v
+  v=$(sql describe --format='value(settings.userLabels.acordado_ate)')
+  echo "${v:-0}"
+}
+
+min_atual() {
+  gcloud run services describe "$1" --project "$PROJETO" --region "$REGIAO" --format=json 2>/dev/null \
+    | grep -o '"autoscaling.knative.dev/minScale": *"[0-9]*"' | grep -o '[0-9]*"$' | tr -d '"' || true
+}
+
+servico_existe() {
+  gcloud run services describe "$1" --project "$PROJETO" --region "$REGIAO" --format='value(metadata.name)' >/dev/null 2>&1
+}
+
+ajustar_min() {
+  local servico="$1" alvo="$2" atual
+  if ! servico_existe "$servico"; then log "$servico ainda não existe, ignorando"; return; fi
+  atual=$(min_atual "$servico")
+  if [[ -z "$atual" && "$alvo" == "0" ]]; then return; fi   # serviço sem mínimo definido = 0
+  if [[ "$atual" != "$alvo" ]]; then
+    log "$servico: instâncias mínimas ${atual:-0} -> $alvo"
+    gcloud run services update "$servico" --project "$PROJETO" --region "$REGIAO" \
+      --min-instances="$alvo" --quiet >/dev/null
+  fi
+}
+
+acordar() {
+  if [[ "$(estado_banco)" != "ALWAYS" ]]; then
+    log "ligando o banco (leva de 1 a 3 minutos)..."
+    sql patch --activation-policy=ALWAYS >/dev/null
+  fi
+  for s in ${SERVICOS//,/ }; do ajustar_min "$s" "$MIN_INSTANCIAS"; done
+  log "ambiente LIGADO"
+}
+
+hibernar() {
+  for s in ${SERVICOS//,/ }; do ajustar_min "$s" 0; done
+  if [[ "$(estado_banco)" != "NEVER" ]]; then
+    log "desligando o banco..."
+    sql patch --activation-policy=NEVER --remove-labels=acordado_ate >/dev/null
+  fi
+  log "ambiente HIBERNADO"
+}
+
+data_hora() { TZ="$FUSO" date -d "@$1" '+%d/%m %H:%M'; }
+
+case "$ACAO" in
+  acordar)
+    acordar
+    if ! em_horario; then
+      ATE=$((AGORA + HORAS_EXTRAS * 3600))
+      sql patch --update-labels="acordado_ate=$ATE" >/dev/null
+      log "fora do horário: fica ligado até $(data_hora "$ATE") e depois hiberna sozinho"
+    fi
+    ;;
+  hibernar)
+    hibernar
+    ;;
+  verificar)
+    ATE=$(acordado_ate)
+    if em_horario; then
+      acordar
+    elif (( AGORA < ATE )); then
+      log "acordado manualmente até $(data_hora "$ATE"), mantendo ligado"
+    else
+      hibernar
+    fi
+    ;;
+  status)
+    ATE=$(acordado_ate)
+    log "agora: $(data_hora "$AGORA") | horário automático: ${HORA_ACORDAR}h-${HORA_HIBERNAR}h, dias $DIAS"
+    log "banco: $(estado_banco)"
+    for s in ${SERVICOS//,/ }; do log "$s: instâncias mínimas $(min_atual "$s")"; done
+    if (( ATE > AGORA )); then log "acordado manualmente até $(data_hora "$ATE")"; fi
+    ;;
+  *)
+    echo "uso: despertador.sh [verificar|acordar [HORAS]|hibernar|status]" >&2
+    exit 2
+    ;;
+esac

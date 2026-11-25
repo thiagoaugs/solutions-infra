@@ -1,0 +1,15 @@
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# chaves e credenciais nunca vão para o repositório (os segredos ficam no Secret Manager de cada projeto)
+*.pem
+*.key
+*.json.key
+credenciais*.json
+.env
+
+# arquivos temporários
+*.log
+tmp/
