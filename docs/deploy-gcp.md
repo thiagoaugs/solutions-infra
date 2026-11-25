@@ -107,6 +107,11 @@ Faça **primeiro a homologação** e, quando estiver funcionando, repita para a 
    ```bash
    bash gcp/deploy.sh homologacao
    ```
+   No Cloud Shell, as imagens são montadas pelo **Cloud Build**, dentro da rede do Google: só o código sobe. O Cloud
+   Shell limita conexões, e enviar imagens grandes com `docker push` falha com "connection refused" no Artifact
+   Registry. No GitHub Actions o deploy usa `docker` normalmente. Para forçar um dos dois: `CONSTRUIR_COM=docker` ou
+   `CONSTRUIR_COM=cloudbuild`. Se o deploy for repetido depois de uma falha, as imagens que já estão no registro são
+   reaproveitadas.
 5. Publique as telas pelo repositório `solutions-praia-frontend` (push na `main`, ou
    `npx ng build && npx firebase-tools@13 deploy --only hosting --project <PROJETO>`).
 6. Entre em `https://<PROJETO>.web.app/admin` com o usuário **admin** e a senha inicial:

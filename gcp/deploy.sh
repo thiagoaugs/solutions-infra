@@ -28,13 +28,17 @@ export URL_KEYCLOAK="https://praia-keycloak-$NUMERO.$REGIAO.run.app"
 export IP_SQL=$(gcloud sql instances describe "$INSTANCIA_SQL" --project "$PROJETO" --format='value(ipAddresses[0].ipAddress)')
 passo() { echo; echo "==> $*"; }
 
-passo "Imagens ($TAG)"
-gcloud auth configure-docker "$REGIAO-docker.pkg.dev" --quiet
-docker build -t "$IMAGEM_API" "$API_DIR"
-docker build -t "$IMAGEM_KEYCLOAK" "$INFRA/keycloak"
-docker build -t "$IMAGEM_DESPERTADOR" "$INFRA/gcp/despertador"
-# Envio com nova tentativa: falha momentânea de rede (ex.: "connection refused" no Cloud Shell) não derruba o deploy.
-# O docker retoma de onde parou; o que já subiu não é enviado de novo.
+# Como as imagens são construídas:
+#   - cloudbuild (padrão fora do GitHub Actions, ex.: Cloud Shell): só o código sobe; a imagem é montada e guardada
+#     dentro da rede do Google. O Cloud Shell limita conexões e o envio de imagens grandes com docker falha
+#     ("connection refused" no Artifact Registry).
+#   - docker (padrão no GitHub Actions, onde a rede não tem esse limite): build e push locais.
+#   Para escolher à mão: CONSTRUIR_COM=cloudbuild|docker
+MODO_BUILD="${CONSTRUIR_COM:-$([[ -n "${CI:-}" ]] && echo docker || echo cloudbuild)}"
+passo "Imagens ($TAG, via $MODO_BUILD)"
+[[ "$MODO_BUILD" == docker ]] && gcloud auth configure-docker "$REGIAO-docker.pkg.dev" --quiet
+
+# Envio com nova tentativa: falha momentânea de rede não derruba o deploy (o docker retoma de onde parou).
 enviar_imagem() {
   local i
   for i in 1 2 3 4; do
@@ -44,7 +48,22 @@ enviar_imagem() {
   echo "Não foi possível enviar $1. Teste a rede: curl -sI https://$REGIAO-docker.pkg.dev/v2/ (esperado: 401)" >&2
   return 1
 }
-enviar_imagem "$IMAGEM_API"; enviar_imagem "$IMAGEM_KEYCLOAK"; enviar_imagem "$IMAGEM_DESPERTADOR"
+
+construir() {   # imagem pasta (com Dockerfile)
+  # a mesma versão já está no registro (ex.: deploy repetido depois de uma falha): não constrói de novo
+  if gcloud artifacts docker images describe "$1" --project "$PROJETO" >/dev/null 2>&1; then
+    echo "   $1 já existe no registro, reaproveitando"
+    return 0
+  fi
+  if [[ "$MODO_BUILD" == docker ]]; then
+    docker build -t "$1" "$2" && enviar_imagem "$1"
+  else
+    gcloud builds submit "$2" --tag "$1" --project "$PROJETO" --quiet
+  fi
+}
+construir "$IMAGEM_API" "$API_DIR"
+construir "$IMAGEM_KEYCLOAK" "$INFRA/keycloak"
+construir "$IMAGEM_DESPERTADOR" "$INFRA/gcp/despertador"
 
 passo "Despertador (Cloud Run Job) e agendamento a cada 15 min"
 gcloud run jobs deploy praia-despertador --project "$PROJETO" --region "$REGIAO" --image "$IMAGEM_DESPERTADOR" \

@@ -22,7 +22,7 @@ passo "Ativando APIs"
 gcloud services enable run.googleapis.com sqladmin.googleapis.com compute.googleapis.com \
   servicenetworking.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com \
   cloudscheduler.googleapis.com iamcredentials.googleapis.com firebasehosting.googleapis.com \
-  firebase.googleapis.com sts.googleapis.com fcm.googleapis.com
+  firebase.googleapis.com sts.googleapis.com fcm.googleapis.com cloudbuild.googleapis.com
 
 passo "Rede privada (o banco não terá IP público)"
 existe gcloud compute networks describe "$REDE" || gcloud compute networks create "$REDE" --subnet-mode=custom
@@ -141,6 +141,13 @@ done
 passo "Artifact Registry (imagens)"
 existe gcloud artifacts repositories describe praia --location "$REGIAO" || \
   gcloud artifacts repositories create praia --repository-format=docker --location "$REGIAO"
+
+# Cloud Build (deploy pelo Cloud Shell monta as imagens dentro do Google): em projetos novos ele roda com a conta
+# padrão do Compute, que precisa ler o código enviado, gravar a imagem no registro e escrever o log do build.
+CONTA_BUILD="$NUMERO-compute@developer.gserviceaccount.com"
+for p in roles/artifactregistry.writer roles/storage.objectViewer roles/logging.logWriter; do
+  tentar gcloud projects add-iam-policy-binding "$PROJETO" --member="serviceAccount:$CONTA_BUILD" --role="$p" --condition=None
+done
 
 passo "Firebase Hosting (ativa o Firebase no mesmo projeto)"
 curl -s -X POST -H "Authorization: Bearer $(gcloud auth print-access-token)" \
