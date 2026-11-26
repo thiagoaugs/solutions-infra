@@ -90,18 +90,29 @@ ajustar_min() {
   fi
 }
 
-acordar() {
+acordar() {   # [opções extras do patch, ex.: --update-labels=acordado_ate=...]
   if [[ "$(estado_banco)" != "ALWAYS" ]]; then
     log "ligando o banco (pode levar alguns minutos)..."
-    mudar_banco ALWAYS
+    mudar_banco ALWAYS "$@"
+  elif [[ $# -gt 0 ]]; then
+    esperar_operacoes_do_banco
+    sql_beta patch "$@" >/dev/null
   fi
   for s in ${SERVICOS//,/ }; do ajustar_min "$s" "$MIN_INSTANCIAS"; done
   log "ambiente LIGADO"
 }
 
-hibernar() {
+hibernar() {   # [verificar] — vindo do agendamento: desiste se alguém acordou o ambiente nesse meio-tempo
   for s in ${SERVICOS//,/ }; do ajustar_min "$s" 0; done
   if [[ "$(estado_banco)" != "NEVER" ]]; then
+    if [[ "${1:-}" == verificar ]]; then
+      esperar_operacoes_do_banco
+      if (( AGORA < $(acordado_ate) )); then
+        log "acordado manualmente enquanto eu verificava, mantendo ligado"
+        for s in ${SERVICOS//,/ }; do ajustar_min "$s" "$MIN_INSTANCIAS"; done
+        return
+      fi
+    fi
     log "desligando o banco..."
     mudar_banco NEVER --remove-labels=acordado_ate
   fi
@@ -112,10 +123,14 @@ data_hora() { TZ="$FUSO" date -d "@$1" '+%d/%m %H:%M'; }
 
 case "$ACAO" in
   acordar)
-    acordar
-    if ! em_horario; then
+    # Fora do horário o prazo (rótulo acordado_ate) vai JUNTO com o "liga o banco", e não depois dele: ligar leva
+    # vários minutos e o "verificar" do agendamento (a cada 15 min) que rodasse nesse intervalo não via prazo nenhum
+    # e hibernava o ambiente de novo logo depois de acordar (e o CI seguia vendo o banco desligado e pulando o deploy).
+    if em_horario; then
+      acordar
+    else
       ATE=$((AGORA + HORAS_EXTRAS * 3600))
-      sql_beta patch --update-labels="acordado_ate=$ATE" >/dev/null
+      acordar --update-labels="acordado_ate=$ATE"
       log "fora do horário: fica ligado até $(data_hora "$ATE") e depois hiberna sozinho"
     fi
     ;;
@@ -123,13 +138,15 @@ case "$ACAO" in
     hibernar
     ;;
   verificar)
+    # um "acordar" manual em andamento termina primeiro (e grava o prazo) antes de decidir
+    if ! em_horario; then esperar_operacoes_do_banco; fi
     ATE=$(acordado_ate)
     if em_horario; then
       acordar
     elif (( AGORA < ATE )); then
       log "acordado manualmente até $(data_hora "$ATE"), mantendo ligado"
     else
-      hibernar
+      hibernar verificar
     fi
     ;;
   status)

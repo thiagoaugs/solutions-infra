@@ -70,6 +70,8 @@ case "$args" in
   "sql operations wait"*)
     op=$(echo "$args" | awk '{print $4}')
     if [[ -f "$E/op-$op" ]]; then cat "$E/op-$op" > "$E/banco"; rm "$E/op-$op"; fi
+    # como no Cloud SQL: o rótulo de um patch assíncrono só vale quando a operação termina
+    if [[ -f "$E/op-$op-rotulo" ]]; then cat "$E/op-$op-rotulo" > "$E/rotulo"; rm "$E/op-$op-rotulo"; fi
     : > "$E/pendente" ;;
   "sql instances patch"*)
     if [[ "$args" == *labels* && $beta == 0 ]]; then echo "ERROR: unrecognized arguments: --*-labels" >&2; exit 2; fi
@@ -77,6 +79,7 @@ case "$args" in
       op="op$RANDOM"
       if [[ "$args" =~ --activation-policy=([A-Z]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/op-$op"; fi
       if [[ "$args" == *"--remove-labels=acordado_ate"* ]]; then : > "$E/rotulo"; fi
+      if [[ "$args" =~ --update-labels=acordado_ate=([0-9]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/op-$op-rotulo"; fi
       echo "$op"; exit 0
     fi
     if [[ "$args" =~ --update-labels=acordado_ate=([0-9]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/rotulo"; fi ;;
@@ -104,6 +107,13 @@ despertador acordar 2;  confere "acordar 2h fora do horário (com operação do 
 despertador verificar;  confere "verificar dentro do prazo mantém ligado" "banco=ALWAYS min=1 rotulo=1795407200"
 despertador hibernar;   confere "hibernar desliga tudo e apaga o prazo" "banco=NEVER min=0 rotulo="
 despertador verificar;  confere "verificar fora do horário mantém hibernado" "banco=NEVER min=0 rotulo="
+# corrida: o "verificar" do agendamento roda enquanto um "acordar" manual ainda está ligando o banco.
+# Antes, o prazo só era gravado no fim do acordar e esse verificar hibernava o ambiente que acabara de acordar.
+echo ALWAYS > "$TMP/estado/op-acordando"; echo 1795407200 > "$TMP/estado/op-acordando-rotulo"
+echo acordando > "$TMP/estado/pendente"
+despertador verificar;  confere "verificar durante um acordar em andamento não hiberna" "banco=ALWAYS min=0 rotulo=1795407200"
+despertador acordar 2;  confere "acordar com o banco já ligado renova o prazo e as instâncias" "banco=ALWAYS min=1 rotulo=1795407200"
+despertador hibernar;   confere "hibernar de novo" "banco=NEVER min=0 rotulo="
 if despertador acao-invalida; then falha "despertador aceitou ação inválida"; else ok "despertador recusa ação inválida"; fi
 
 echo
