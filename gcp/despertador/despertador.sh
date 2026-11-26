@@ -59,6 +59,9 @@ mudar_banco() {   # ALWAYS|NEVER [opções extras do patch, ex.: --remove-labels
   local politica="$1" op; shift
   esperar_operacoes_do_banco
   op=$(sql_beta patch --activation-policy="$politica" "$@" --async --format='value(name)')
+  # Desligar: ninguém precisa esperar o banco terminar de parar (são minutos à toa no job); a operação segue no
+  # Google e a próxima execução espera por ela se precisar mexer no banco. Ligar: espera, os serviços dependem dele.
+  if [[ "$politica" == NEVER ]]; then log "banco desligando (segue sozinho no Google)"; return; fi
   gcloud beta sql operations wait "$op" --project "$PROJETO" --timeout="$ESPERA_BANCO_S" >/dev/null
 }
 
@@ -85,28 +88,31 @@ ajustar_min() {
   if [[ -z "$atual" && "$alvo" == "0" ]]; then return; fi   # serviço sem mínimo definido = 0
   if [[ "$atual" != "$alvo" ]]; then
     log "$servico: instâncias mínimas ${atual:-0} -> $alvo"
+    # --async: mudar o mínimo cria uma revisão nova e, sem isso, o gcloud espera ela ficar pronta (o Keycloak leva
+    # até 3 min para subir; a API, mais um), um serviço de cada vez, até para desligar. O Cloud Run termina sozinho.
     gcloud run services update "$servico" --project "$PROJETO" --region "$REGIAO" \
-      --min-instances="$alvo" --quiet >/dev/null
+      --min-instances="$alvo" --async --quiet >/dev/null
   fi
 }
 
 acordar() {   # [opções extras do patch, ex.: --update-labels=acordado_ate=...]
+  # antes de olhar o estado: um desligamento ainda em andamento (o hibernar não espera) mudaria a resposta
+  esperar_operacoes_do_banco
   if [[ "$(estado_banco)" != "ALWAYS" ]]; then
     log "ligando o banco (pode levar alguns minutos)..."
     mudar_banco ALWAYS "$@"
   elif [[ $# -gt 0 ]]; then
-    esperar_operacoes_do_banco
     sql_beta patch "$@" >/dev/null
   fi
   for s in ${SERVICOS//,/ }; do ajustar_min "$s" "$MIN_INSTANCIAS"; done
-  log "ambiente LIGADO"
+  log "ambiente LIGADO (banco pronto; Keycloak e API terminam de subir em 1-3 min)"
 }
 
 hibernar() {   # [verificar] — vindo do agendamento: desiste se alguém acordou o ambiente nesse meio-tempo
   for s in ${SERVICOS//,/ }; do ajustar_min "$s" 0; done
+  esperar_operacoes_do_banco   # um "ligar" em andamento termina antes de olhar o estado
   if [[ "$(estado_banco)" != "NEVER" ]]; then
     if [[ "${1:-}" == verificar ]]; then
-      esperar_operacoes_do_banco
       if (( AGORA < $(acordado_ate) )); then
         log "acordado manualmente enquanto eu verificava, mantendo ligado"
         for s in ${SERVICOS//,/ }; do ajustar_min "$s" "$MIN_INSTANCIAS"; done

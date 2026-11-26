@@ -80,14 +80,17 @@ case "$args" in
       if [[ "$args" =~ --activation-policy=([A-Z]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/op-$op"; fi
       if [[ "$args" == *"--remove-labels=acordado_ate"* ]]; then : > "$E/rotulo"; fi
       if [[ "$args" =~ --update-labels=acordado_ate=([0-9]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/op-$op-rotulo"; fi
-      echo "$op"; exit 0
+      echo "$op"; echo "$op" >> "$E/pendente"; exit 0
     fi
     if [[ "$args" =~ --update-labels=acordado_ate=([0-9]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/rotulo"; fi ;;
   "sql instances describe"*userLabels*) cat "$E/rotulo" ;;
   "sql instances describe"*activationPolicy*) cat "$E/banco" ;;
   "run services describe"*"--format=json"*) echo "{\"autoscaling.knative.dev/minScale\": \"$(cat "$E/min" 2>/dev/null || echo 0)\"}" ;;
   "run services describe"*) echo ok ;;
-  "run services update"*) if [[ "$args" =~ --min-instances=([0-9]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/min"; fi ;;
+  "run services update"*)
+    # sem --async o gcloud real fica esperando a revisão nova subir (minutos no Keycloak)
+    if [[ "$args" != *"--async"* ]]; then echo "ERRO no teste: services update sem --async" >&2; exit 3; fi
+    if [[ "$args" =~ --min-instances=([0-9]+) ]]; then echo "${BASH_REMATCH[1]}" > "$E/min"; fi ;;
 esac
 exit 0
 FALSO
@@ -97,7 +100,15 @@ despertador() {   # ação [horas] — AGORA_TESTE: madrugada (fora do horário)
   env ESTADO="$TMP/estado" PATH="$TMP/bin:$PATH" PROJETO=teste REGIAO=southamerica-east1 INSTANCIA_SQL=praia-db \
       SERVICOS=praia-keycloak DIAS=0 AGORA_TESTE=1795400000 bash "$RAIZ/gcp/despertador/despertador.sh" "$@" >"$TMP/saida" 2>&1
 }
-estado() { echo "banco=$(cat "$TMP/estado/banco") min=$(cat "$TMP/estado/min" 2>/dev/null || echo 0) rotulo=$(cat "$TMP/estado/rotulo")"; }
+estado() {   # o tempo passa: operações que o despertador deixou seguindo sozinhas (ex.: desligar o banco) terminam
+  local f
+  for f in "$TMP"/estado/op-*; do
+    [[ -f "$f" ]] || continue
+    if [[ "$f" == *-rotulo ]]; then cat "$f" > "$TMP/estado/rotulo"; else cat "$f" > "$TMP/estado/banco"; fi
+    rm "$f"
+  done
+  : > "$TMP/estado/pendente"
+  echo "banco=$(cat "$TMP/estado/banco") min=$(cat "$TMP/estado/min" 2>/dev/null || echo 0) rotulo=$(cat "$TMP/estado/rotulo")"; }
 confere() {   # descrição esperado
   local atual; atual="$(estado)"
   if [[ "$atual" == "$2" ]]; then ok "$1"; else falha "$1: esperado [$2], ficou [$atual]"; sed 's/^/          /' "$TMP/saida"; fi
@@ -114,6 +125,12 @@ echo acordando > "$TMP/estado/pendente"
 despertador verificar;  confere "verificar durante um acordar em andamento não hiberna" "banco=ALWAYS min=0 rotulo=1795407200"
 despertador acordar 2;  confere "acordar com o banco já ligado renova o prazo e as instâncias" "banco=ALWAYS min=1 rotulo=1795407200"
 despertador hibernar;   confere "hibernar de novo" "banco=NEVER min=0 rotulo="
+despertador acordar 2
+despertador hibernar
+if grep -q "segue sozinho" "$TMP/saida"; then ok "hibernar não fica esperando o banco terminar de desligar"
+else falha "hibernar esperou o banco desligar"; fi
+despertador acordar 2;  confere "acordar logo depois de hibernar (desligamento ainda em andamento)" "banco=ALWAYS min=1 rotulo=1795407200"
+despertador hibernar;   confere "hibernar no fim" "banco=NEVER min=0 rotulo="
 if despertador acao-invalida; then falha "despertador aceitou ação inválida"; else ok "despertador recusa ação inválida"; fi
 
 echo
