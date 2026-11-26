@@ -153,6 +153,10 @@ Regras dos workflows:
   repositórios. Só os jobs de deploy podem pedir esse login; os testes e os pull requests não.
 - **Tempo:** cada job tem limite (testes 15–20 min, deploy 45 min), para um travamento não consumir os 2.000
   minutos/mês do plano gratuito.
+- **Deploy rápido:** as imagens do Keycloak e do despertador levam o hash da própria pasta como tag; um push só na API
+  reaproveita as duas do registro (não constrói nem reinicia o Keycloak). A imagem da API usa cache de camadas
+  guardado no próprio Artifact Registry (`praia-api:cache`): com o `pom.xml` igual, só o código é recompilado.
+  O primeiro deploy depois dessa mudança ainda constrói tudo uma vez (para criar as tags e o cache).
 - **Trava do ambiente dormindo:** nos pushes que publicam (`main` e tags `v*`), o primeiro job (`ambiente`, ~20 s) lê
   pela API do Cloud SQL se o banco do ambiente de destino está ligado (`ALWAYS` + `RUNNABLE`). Se estiver hibernado,
   **testes e deploy são pulados** e a execução termina com o aviso "Ambiente dormindo" e as instruções no resumo.

@@ -24,23 +24,27 @@ API_DIR="$(cd "${API_DIR:-$INFRA/../solutions-praia-api}" 2>/dev/null && pwd)" |
 [[ -f "$API_DIR/Dockerfile" ]] || { echo "Sem Dockerfile em $API_DIR (é a pasta do solutions-praia-api?)" >&2; exit 1; }
 echo "Ambiente: $AMBIENTE (projeto $PROJETO) | API: $API_DIR"
 
-# Nome (tag) de cada imagem = versão do código de onde ela sai, para um deploy repetido reaproveitar só o que não mudou:
+# Nome (tag) de cada imagem = versão do código de onde ela sai, para cada deploy construir só o que mudou:
 #   - API: commit (homologação) ou versão (produção, TAG=v1.2.3) do solutions-praia-api;
-#   - Keycloak e despertador: saem DESTE repositório, então levam também o commit do solutions-infra.
+#   - Keycloak e despertador: o conteúdo da PRÓPRIA pasta (hash do git). Um push na API não muda essas pastas, então
+#     as imagens são reaproveitadas do registro (sem baixar ~1,5 GB de imagens base nem construir) e o Keycloak não
+#     ganha revisão nova (não reinicia).
 # Pasta com alterações ainda sem commit ganha um carimbo de hora (nunca reaproveita uma imagem antiga por engano).
-versao() {   # pasta
-  local v; v="$(git -C "$1" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
-  [[ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]] && v="$v-mod$(date +%Y%m%d%H%M%S)"
+versao() {   # repositório [subpasta]
+  local v
+  if [[ -n "${2:-}" ]]; then v="$(git -C "$1" rev-parse --short=12 "HEAD:$2" 2>/dev/null || true)"
+  else v="$(git -C "$1" rev-parse --short HEAD 2>/dev/null || true)"; fi
+  v="${v:-$(date +%Y%m%d%H%M%S)}"
+  [[ -n "$(git -C "$1" status --porcelain -- "${2:-.}" 2>/dev/null)" ]] && v="$v-mod$(date +%Y%m%d%H%M%S)"
   echo "$v"
 }
 TAG="${TAG:-$(versao "$API_DIR")}"
-TAG_INFRA="$(versao "$INFRA")"
 REGISTRO="$REGIAO-docker.pkg.dev/$PROJETO/praia"
 NUMERO=$(gcloud projects describe "$PROJETO" --format='value(projectNumber)')
 export PROJETO REGIAO REDE SUBREDE ADMIN_EMAIL AMBIENTE MAX_API DADOS_EXEMPLO
 export IMAGEM_API="$REGISTRO/praia-api:$TAG"
-export IMAGEM_KEYCLOAK="$REGISTRO/praia-keycloak:$TAG-$TAG_INFRA"
-IMAGEM_DESPERTADOR="$REGISTRO/praia-despertador:$TAG-$TAG_INFRA"
+export IMAGEM_KEYCLOAK="$REGISTRO/praia-keycloak:$(versao "$INFRA" keycloak)"
+IMAGEM_DESPERTADOR="$REGISTRO/praia-despertador:$(versao "$INFRA" gcp/despertador)"
 export URL_PUBLICA="${DOMINIO:+https://$DOMINIO}"; URL_PUBLICA="${URL_PUBLICA:-https://$PROJETO.web.app}"
 # URL determinística do Cloud Run: https://<serviço>-<número do projeto>.<região>.run.app
 export URL_KEYCLOAK="https://praia-keycloak-$NUMERO.$REGIAO.run.app"
@@ -54,18 +58,25 @@ passo() { echo; echo "==> $*"; }
 #   - cloudbuild (padrão fora do GitHub Actions, ex.: Cloud Shell): só o código sobe; a imagem é montada e guardada
 #     dentro da rede do Google. O Cloud Shell limita conexões e o envio de imagens grandes com docker falha
 #     ("connection refused" no Artifact Registry).
-#   - docker (padrão no GitHub Actions, onde a rede não tem esse limite): build e push locais.
+#   - docker (padrão no GitHub Actions, onde a rede não tem esse limite): build e push com o buildx.
+#     O runner do GitHub começa sempre vazio, então o cache das camadas fica no próprio registro (<imagem>:cache):
+#     com o pom.xml igual, as dependências do Maven não são baixadas de novo e só o código é compilado.
 #   Para escolher à mão: CONSTRUIR_COM=cloudbuild|docker
 MODO_BUILD="${CONSTRUIR_COM:-$([[ -n "${CI:-}" ]] && echo docker || echo cloudbuild)}"
 passo "Imagens ($TAG, via $MODO_BUILD)"
-[[ "$MODO_BUILD" == docker ]] && gcloud auth configure-docker "$REGIAO-docker.pkg.dev" --quiet
+if [[ "$MODO_BUILD" == docker ]]; then
+  gcloud auth configure-docker "$REGIAO-docker.pkg.dev" --quiet
+  # o driver padrão do docker não exporta cache para o registro; este (BuildKit em contêiner) exporta
+  docker buildx inspect praia >/dev/null 2>&1 || docker buildx create --name praia --driver docker-container >/dev/null
+fi
 
-# Envio com nova tentativa: falha momentânea de rede não derruba o deploy (o docker retoma de onde parou).
-enviar_imagem() {
-  local i
-  for i in 1 2 3 4; do
-    docker push -q "$1" && return 0
-    [[ $i -lt 4 ]] && { echo "   falha ao enviar $1 (tentativa $i de 4); tentando de novo em ${ESPERA_PUSH:-15}s..."; sleep "${ESPERA_PUSH:-15}"; }
+# Build + envio com o cache no registro. Nova tentativa em falha momentânea de rede (o cache faz a 2ª ser rápida).
+construir_docker() {   # imagem pasta
+  local cache="${1%:*}:cache" i
+  for i in 1 2 3; do
+    docker buildx build --builder praia --progress=plain --push -t "$1" \
+      --cache-from "type=registry,ref=$cache" --cache-to "type=registry,ref=$cache,mode=max" "$2" && return 0
+    [[ $i -lt 3 ]] && { echo "   falha ao construir/enviar $1 (tentativa $i de 3); tentando de novo em ${ESPERA_PUSH:-15}s..."; sleep "${ESPERA_PUSH:-15}"; }
   done
   echo "Não foi possível enviar $1. Teste a rede: curl -sI https://$REGIAO-docker.pkg.dev/v2/ (esperado: 401)" >&2
   return 1
@@ -78,7 +89,7 @@ construir() {   # imagem pasta (com Dockerfile)
     return 0
   fi
   if [[ "$MODO_BUILD" == docker ]]; then
-    docker build -t "$1" "$2" && enviar_imagem "$1"
+    construir_docker "$1" "$2"
   else
     gcloud builds submit "$2" --tag "$1" --project "$PROJETO" --quiet
   fi
