@@ -153,6 +153,14 @@ Regras dos workflows:
   repositórios. Só os jobs de deploy podem pedir esse login; os testes e os pull requests não.
 - **Tempo:** cada job tem limite (testes 15–20 min, deploy 45 min), para um travamento não consumir os 2.000
   minutos/mês do plano gratuito.
+- **Trava do ambiente dormindo:** nos pushes que publicam (`main` e tags `v*`), o primeiro job (`ambiente`, ~20 s) lê
+  pela API do Cloud SQL se o banco do ambiente de destino está ligado (`ALWAYS` + `RUNNABLE`). Se estiver hibernado,
+  **testes e deploy são pulados** e a execução termina com o aviso "Ambiente dormindo" e as instruções no resumo.
+  Antes, o `deploy.sh` acordava o ambiente e esperava (até 25 min) e o job acabava travando. Para publicar: acorde
+  (`.\gcp\despertador.ps1 homologacao acordar` ou `bash gcp/despertador-cli.sh homologacao acordar`), espere terminar
+  e clique em **Re-run all jobs**. Pull requests não passam pela trava (só testes). O nome da instância é `praia-db`;
+  se for outro, crie a variável do repositório `GCP_INSTANCIA_SQL`. Por segurança, o `deploy.sh` rodando no CI
+  também para na hora (em vez de acordar) se encontrar o ambiente hibernado; rodando à mão, continua acordando por 1h.
 - **Ordem numa versão nova:** crie a tag primeiro na API, espere o deploy dela terminar e só então no frontend.
 - **Este repositório** (`solutions-infra`) tem o workflow *Verificar*: shellcheck e `gcp/testes/verificar.sh`
   (sintaxe, ambientes, arquivos do Cloud Run e o despertador com um gcloud simulado), sem acessar o GCP. Rode o mesmo

@@ -6,9 +6,19 @@
 #             Padrão: a pasta irmã ../solutions-praia-api (os dois repositórios lado a lado).
 # O GitHub Actions do repositório da API chama este script: homologação a cada push na main, produção a cada tag v*.
 # Se o ambiente estiver hibernado, ele é acordado por 1h antes do deploy (os serviços precisam do banco para subir).
+# No CI (GitHub Actions) não: acordar o banco leva até 25 min e o job ficava preso esperando. Lá o workflow já pula
+# tudo com o ambiente dormindo; se mesmo assim chegar aqui hibernado, o deploy para na hora com um erro claro.
 set -euo pipefail
 INFRA="$(cd "$(dirname "$0")/.." && pwd)"
 source "$INFRA/gcp/ambiente.sh" "${1:-}"
+
+if [[ -n "${CI:-}" ]]; then
+  POLITICA_BANCO=$(gcloud sql instances describe "$INSTANCIA_SQL" --project "$PROJETO" --format='value(settings.activationPolicy)')
+  if [[ "$POLITICA_BANCO" != "ALWAYS" ]]; then
+    echo "::error title=Ambiente dormindo::$AMBIENTE está hibernado (banco $POLITICA_BANCO). Acorde com gcp/despertador-cli.sh $AMBIENTE acordar e rode o workflow de novo."
+    exit 1
+  fi
+fi
 API_DIR="$(cd "${API_DIR:-$INFRA/../solutions-praia-api}" 2>/dev/null && pwd)" || {
   echo "Código da API não encontrado. Informe API_DIR=<pasta do solutions-praia-api>" >&2; exit 1; }
 [[ -f "$API_DIR/Dockerfile" ]] || { echo "Sem Dockerfile em $API_DIR (é a pasta do solutions-praia-api?)" >&2; exit 1; }
